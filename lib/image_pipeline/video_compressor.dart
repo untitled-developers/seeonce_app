@@ -18,13 +18,29 @@ class VideoCompressor {
   /// after use.
   static Future<CompressedVideo?> compress(String filePath) async {
     final trimSeconds = AppConstants.maxVideoDuration.inSeconds;
+
+    // Only pass a trim window when the clip is actually longer than the cap.
+    // Asking video_compress for a `duration` that exceeds the source length
+    // makes it fail outright on Android ("failed to compress"), which broke
+    // every sub-10s video. A null duration means "use the whole clip".
+    int? trimDuration;
+    try {
+      final media = await VideoCompress.getMediaInfo(filePath);
+      final totalMs = media.duration ?? 0;
+      if (totalMs > trimSeconds * 1000) {
+        trimDuration = trimSeconds;
+      }
+    } catch (_) {
+      trimDuration = null; // probe failed — compress the whole clip
+    }
+
     final info = await VideoCompress.compressVideo(
       filePath,
       quality: VideoQuality.MediumQuality,
       deleteOrigin: false,
       includeAudio: true,
-      startTime: 0,
-      duration: trimSeconds, // hard cap to 10s
+      startTime: trimDuration != null ? 0 : null,
+      duration: trimDuration, // hard cap to 10s only when the clip is longer
     );
 
     final path = info?.path;

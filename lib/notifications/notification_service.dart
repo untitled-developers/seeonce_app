@@ -5,7 +5,11 @@ class NotificationService {
   NotificationService._internal();
 
   final FlutterLocalNotificationsPlugin _plugin = FlutterLocalNotificationsPlugin();
-  
+
+  /// Notification ids shown per peer, so opening a chat can clear that peer's
+  /// outstanding notifications (see [cancelForPeer]).
+  final Map<String, Set<int>> _idsByPeer = {};
+
   static const _channelId = 'seeonce_images';
   static const _channelName = 'Received Images';
   static const _msgChannelId = 'seeonce_messages';
@@ -81,6 +85,7 @@ class NotificationService {
       iOS: iosDetails,
     );
     
+    _idsByPeer.putIfAbsent(peerId, () => <int>{}).add(messageId.hashCode);
     await _plugin.show(
       messageId.hashCode,
       "New image",
@@ -110,6 +115,7 @@ class NotificationService {
     );
     const details =
         NotificationDetails(android: androidDetails, iOS: iosDetails);
+    _idsByPeer.putIfAbsent(peerId, () => <int>{}).add(messageId.hashCode);
     await _plugin.show(
       messageId.hashCode,
       "New video",
@@ -146,6 +152,7 @@ class NotificationService {
       iOS: iosDetails,
     );
 
+    _idsByPeer.putIfAbsent(peerId, () => <int>{}).add(messageId.hashCode);
     await _plugin.show(
       messageId.hashCode,
       "New message",
@@ -153,5 +160,17 @@ class NotificationService {
       details,
       payload: peerId, // Used to navigate on tap
     );
+  }
+
+  /// Dismisses every outstanding notification for [peerId]. Called when the
+  /// peer's chat is opened, so the shade reflects "you've seen these".
+  Future<void> cancelForPeer(String peerId) async {
+    final ids = _idsByPeer.remove(peerId);
+    if (ids == null) return;
+    for (final id in ids) {
+      try {
+        await _plugin.cancel(id);
+      } catch (_) {}
+    }
   }
 }

@@ -70,3 +70,12 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+
+  fonts:
+    # Bundled color-emoji fallback (Noto COLRv1) so emoji render identically on
+    # every device. Older Androids ship an emoji font that lacks newer glyphs,
+    # which showed received emoji as empty boxes. Wired in as fontFamilyFallback
+    # in lib/app.dart.
+    - family: NotoColorEmoji
+      fonts:
+        - asset: assets/fonts/NotoColorEmoji.ttf

@@ -55,6 +55,7 @@ class ConnectionSupervisor {
   PeerRepository? _repo;
   Future<List<Peer>> Function()? _loadPeersOverride;
   Timer? _timer;
+  StreamSubscription<void>? _poolSub;
   final Map<String, _Backoff> _backoff = {};
   bool _running = false;
 
@@ -63,6 +64,11 @@ class ConnectionSupervisor {
     _running = true;
     _repo = peerRepository;
     _timer = Timer.periodic(_tickInterval, (_) => superviseOnce(DateTime.now()));
+    // React the moment a link drops (or comes up) instead of waiting for the
+    // next tick, so reconnection — and its "Reconnecting…" UI — starts promptly.
+    _poolSub = PeerConnectionPool.instance.onConnectionChange.listen((_) {
+      if (_running) superviseOnce(DateTime.now());
+    });
     superviseOnce(DateTime.now()); // kick immediately
   }
 
@@ -76,6 +82,8 @@ class ConnectionSupervisor {
   void stop() {
     _timer?.cancel();
     _timer = null;
+    _poolSub?.cancel();
+    _poolSub = null;
     _running = false;
     _backoff.clear();
   }

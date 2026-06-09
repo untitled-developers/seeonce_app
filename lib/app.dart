@@ -8,6 +8,7 @@ import 'package:no_screenshot/no_screenshot.dart';
 
 import 'crypto/key_store.dart';
 import 'data/repositories/peer_repository.dart';
+import 'messaging/incoming_message_router.dart';
 import 'rtc/connection_supervisor.dart';
 import 'rtc/local_reconnect_service.dart';
 import 'services/background_service.dart';
@@ -24,6 +25,7 @@ import 'data/models/video_message.dart';
 
 final _router = GoRouter(
   initialLocation: '/',
+  observers: [routeObserver],
   routes: [
     GoRoute(
       path: '/',
@@ -118,6 +120,9 @@ class _SeeOnceAppState extends ConsumerState<SeeOnceApp>
     // can take many seconds, so we gate the UI behind it rather than freezing.
     await KeyStore.instance.ensureKeysExist();
     final repo = PeerRepository();
+    // App-wide receiver: owns every channel's onMessage, routes payloads into
+    // the conversation store and raises notifications for chats not on screen.
+    IncomingMessageRouter.instance.start(ref);
     // Start listening for reconnect offers so any screen can answer. Keys must
     // already exist (it computes our own key hash), hence the ordering here.
     unawaited(LocalReconnectService.instance.start(peerRepository: repo));
@@ -150,9 +155,16 @@ class _SeeOnceAppState extends ConsumerState<SeeOnceApp>
           onSurface: Color(0xFFF1F1F7),
           error: Color(0xFFEF4444),
         ),
-        textTheme: GoogleFonts.interTextTheme(ThemeData.dark().textTheme).copyWith(
-          bodyMedium: const TextStyle(color: Color(0xFFF1F1F7)),
-          bodySmall: const TextStyle(color: Color(0xFF9090A0)),
+        // Bundle Noto color-emoji as a fallback so emoji render the same on
+        // every device — older Androids lack newer glyphs and showed boxes.
+        textTheme: GoogleFonts.interTextTheme(ThemeData.dark().textTheme)
+            .apply(fontFamilyFallback: const ['NotoColorEmoji']).copyWith(
+          bodyMedium: const TextStyle(
+              color: Color(0xFFF1F1F7),
+              fontFamilyFallback: ['NotoColorEmoji']),
+          bodySmall: const TextStyle(
+              color: Color(0xFF9090A0),
+              fontFamilyFallback: ['NotoColorEmoji']),
         ),
         snackBarTheme: const SnackBarThemeData(
           behavior: SnackBarBehavior.floating,

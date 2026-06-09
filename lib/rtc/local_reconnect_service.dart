@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
@@ -40,6 +41,38 @@ class LocalReconnectService {
 
   /// Active outgoing offers, keyed by target peer's key hash.
   final _pendingByTarget = <String, RTCPeerConnection>{};
+
+  /// Peer ids with a reconnect attempt currently in flight. Drives the
+  /// "Reconnecting…" indicator in the UI (peer list + open conversation).
+  final _reconnecting = <String>{};
+  final _reconnectTimers = <String, Timer>{};
+  final _activityController = StreamController<void>.broadcast();
+
+  /// How long a single attempt is surfaced as "reconnecting" before falling
+  /// back to plain "offline" (until the supervisor's next retry). Comfortably
+  /// longer than a normal LAN reconnect, shorter than the supervisor's max
+  /// backoff, so a stuck attempt doesn't spin forever.
+  static const _attemptTimeout = Duration(seconds: 15);
+
+  /// Fires whenever the set of in-flight reconnect attempts changes.
+  Stream<void> get onReconnectActivity => _activityController.stream;
+
+  /// True while an automatic or manual reconnect attempt for [peerId] is live.
+  bool isReconnecting(String peerId) => _reconnecting.contains(peerId);
+
+  void _markReconnecting(String peerId) {
+    final isNew = _reconnecting.add(peerId);
+    _reconnectTimers[peerId]?.cancel();
+    _reconnectTimers[peerId] = Timer(_attemptTimeout, () {
+      _clearReconnecting(peerId);
+    });
+    if (isNew) _activityController.add(null);
+  }
+
+  void _clearReconnecting(String peerId) {
+    _reconnectTimers.remove(peerId)?.cancel();
+    if (_reconnecting.remove(peerId)) _activityController.add(null);
+  }
 
   // ── Public API ─────────────────────────────────────────────────────────────
 
@@ -121,6 +154,13 @@ class LocalReconnectService {
       }
     }
     _pendingByTarget.clear();
+    for (final t in _reconnectTimers.values) {
+      t.cancel();
+    }
+    _reconnectTimers.clear();
+    final hadActivity = _reconnecting.isNotEmpty;
+    _reconnecting.clear();
+    if (hadActivity) _activityController.add(null);
     _started = false;
     _log('[Reconnect] Stopped');
   }
@@ -211,6 +251,7 @@ class LocalReconnectService {
     final toPeerKeyHash = _keyHash(targetPeer.publicKeyPem);
     _log(
         '[Reconnect] _sendOffer → ${targetPeer.displayName} (targetHash=$toPeerKeyHash)');
+    _markReconnecting(targetPeer.id);
 
     // Close and replace any stale pending offer
     final stale = _pendingByTarget.remove(toPeerKeyHash);
@@ -237,6 +278,7 @@ class LocalReconnectService {
           // Register only after the peer proves possession of its private key.
           _authenticateChannel(dc, targetPeer, () {
             PeerConnectionPool.instance.register(targetPeer.id, pc, dc);
+            _clearReconnecting(targetPeer.id);
             _log(
                 '[Reconnect] ✅ Reconnected (initiator) to ${targetPeer.displayName} id=${targetPeer.id}');
           });
@@ -249,6 +291,7 @@ class LocalReconnectService {
         if (s == RTCPeerConnectionState.RTCPeerConnectionStateFailed ||
             s == RTCPeerConnectionState.RTCPeerConnectionStateDisconnected) {
           _pendingByTarget.remove(toPeerKeyHash);
+          _clearReconnecting(targetPeer.id);
           _log(
               '[Reconnect] Connection failed/disconnected for ${targetPeer.displayName}');
         }
@@ -285,6 +328,7 @@ class LocalReconnectService {
       _log(
           '[Reconnect] _sendOffer failed for ${targetPeer.displayName}: $e\n$st');
       _pendingByTarget.remove(toPeerKeyHash);
+      _clearReconnecting(targetPeer.id);
     }
   }
 
@@ -350,6 +394,7 @@ class LocalReconnectService {
 
     _log(
         '[Reconnect] Offer is from known peer ${senderPeer.displayName} (id=${senderPeer.id}) — processing');
+    _markReconnecting(senderPeer.id);
 
     // Tiebreaker: both devices restarted simultaneously
     if (_pendingByTarget.containsKey(fromKeyHash)) {
@@ -381,6 +426,7 @@ class LocalReconnectService {
             // Register only after mutual private-key proof.
             _authenticateChannel(dc, senderPeer, () {
               PeerConnectionPool.instance.register(senderPeer.id, pc, dc);
+              _clearReconnecting(senderPeer.id);
               _log(
                   '[Reconnect] ✅ Reconnected (answerer) to ${senderPeer.displayName} id=${senderPeer.id}');
             });
@@ -391,6 +437,10 @@ class LocalReconnectService {
       pc.onConnectionState = (s) {
         _log(
             '[Reconnect] ConnectionState → $s (answerer ← ${senderPeer.displayName})');
+        if (s == RTCPeerConnectionState.RTCPeerConnectionStateFailed ||
+            s == RTCPeerConnectionState.RTCPeerConnectionStateDisconnected) {
+          _clearReconnecting(senderPeer.id);
+        }
       };
       pc.onIceConnectionState = (s) {
         _log(
@@ -441,6 +491,7 @@ class LocalReconnectService {
     } catch (e, st) {
       _log(
           '[Reconnect] _handleIncomingOffer failed for ${senderPeer.displayName}: $e\n$st');
+      _clearReconnecting(senderPeer.id);
     }
   }
 

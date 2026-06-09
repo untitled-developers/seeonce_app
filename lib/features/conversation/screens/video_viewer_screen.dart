@@ -37,9 +37,10 @@ class _VideoViewerScreenState extends ConsumerState<VideoViewerScreen>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.paused ||
-        state == AppLifecycleState.inactive) {
-      // Backgrounding consumes the view, same as images.
+    // Only a genuine background (`paused`) consumes the view. `inactive` fires
+    // transiently during route transitions / control-centre peeks, which was
+    // dismissing the player the instant it opened.
+    if (state == AppLifecycleState.paused) {
       _markViewedAndPop();
     }
   }
@@ -96,8 +97,6 @@ class _VideoViewerScreenState extends ConsumerState<VideoViewerScreen>
           child: Center(
             child: SecureVideoWidget(
               videoBytes: widget.message.videoBytes,
-              // Auto-dismiss when playback finishes.
-              onCompleted: _markViewedAndPop,
             ),
           ),
         ),

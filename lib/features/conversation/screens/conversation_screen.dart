@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter/material.dart';
@@ -12,20 +11,16 @@ import 'package:uuid/uuid.dart';
 
 import '../../../core/constants.dart';
 import '../../../core/errors.dart';
-import '../../../crypto/hybrid_cipher.dart';
-import '../../../crypto/key_store.dart';
-import '../../../data/models/image_envelope.dart';
 import '../../../data/models/image_message.dart';
 import '../../../data/models/peer.dart';
-import '../../../data/models/text_envelope.dart';
 import '../../../data/models/text_message.dart';
-import '../../../data/models/video_envelope.dart';
 import '../../../data/models/video_message.dart';
 import '../../../data/repositories/settings_repository.dart';
 import '../../../image_pipeline/image_sender.dart';
 import '../../../image_pipeline/video_sender.dart';
+import '../../../messaging/incoming_message_router.dart';
 import '../../../messaging/message_sender.dart';
-import '../../../notifications/notification_service.dart';
+import '../../../rtc/local_reconnect_service.dart';
 import '../../../rtc/peer_connection_pool.dart';
 import '../../../rtc/rtc_channel_handler.dart';
 import '../../peers/providers/peers_provider.dart';
@@ -41,15 +36,19 @@ class ConversationScreen extends ConsumerStatefulWidget {
 }
 
 class _ConversationScreenState extends ConsumerState<ConversationScreen>
-    with WidgetsBindingObserver {
+    with WidgetsBindingObserver, RouteAware {
   final _imagePicker = ImagePicker();
   final _textController = TextEditingController();
   final _scrollController = ScrollController();
+  // Send-only channel handler; incoming messages are owned by the global
+  // IncomingMessageRouter so they arrive whether or not this screen is open.
   RtcChannelHandler? _channelHandler;
   Peer? _peer;
   bool _isSending = false;
   bool _initialScrollDone = false;
+  bool _leaving = false;
   StreamSubscription<void>? _connSub;
+  StreamSubscription<void>? _activitySub;
 
   @override
   void initState() {
@@ -57,18 +56,57 @@ class _ConversationScreenState extends ConsumerState<ConversationScreen>
     WidgetsBinding.instance.addObserver(this);
     // Expire stale messages on chat open (a reliable trigger beyond the timer).
     ref.read(conversationProvider.notifier).sweepExpired();
-    _loadPeerAndSetupChannel();
-    // Re-attach message handler if peer reconnects while this screen is open
+    // This chat is now on screen: suppress its notifications and clear any
+    // already showing for this peer.
+    IncomingMessageRouter.instance.setActiveChat(widget.peerId);
+    _loadPeer();
+    // Refresh online status when the connection comes up or drops.
     _connSub = PeerConnectionPool.instance.onConnectionChange.listen((_) {
-      _loadPeerAndSetupChannel();
+      _loadPeer();
+    });
+    // Rebuild the header/banner when a reconnect attempt starts or ends.
+    _activitySub =
+        LocalReconnectService.instance.onReconnectActivity.listen((_) {
+      if (mounted) setState(() {});
     });
   }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final route = ModalRoute.of<void>(context);
+    if (route != null) routeObserver.subscribe(this, route);
+  }
+
+  // RouteAware: keep the router's "active chat" in sync with visibility so a
+  // chat hidden behind another route (or the image/video viewer) still notifies.
+  @override
+  void didPush() => IncomingMessageRouter.instance.setActiveChat(widget.peerId);
+  @override
+  void didPopNext() =>
+      IncomingMessageRouter.instance.setActiveChat(widget.peerId);
+  @override
+  void didPushNext() => IncomingMessageRouter.instance.setActiveChat(null);
+  @override
+  void didPop() => IncomingMessageRouter.instance.setActiveChat(null);
 
   @override
   void didChangeMetrics() {
     // Fires when the keyboard opens/closes (viewInsets change); keep the latest
     // message visible above the keyboard.
     _scrollToBottom();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Backgrounding means you're no longer looking at the chat, so release the
+    // active marker (incoming messages should notify); re-claim it on resume.
+    if (state == AppLifecycleState.resumed) {
+      IncomingMessageRouter.instance.setActiveChat(widget.peerId);
+    } else if (state == AppLifecycleState.paused &&
+        IncomingMessageRouter.instance.activeChatPeerId == widget.peerId) {
+      IncomingMessageRouter.instance.setActiveChat(null);
+    }
   }
 
   /// Scrolls to the newest message after the next frame (so the list has its
@@ -93,166 +131,23 @@ class _ConversationScreenState extends ConsumerState<ConversationScreen>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    routeObserver.unsubscribe(this);
+    if (IncomingMessageRouter.instance.activeChatPeerId == widget.peerId) {
+      IncomingMessageRouter.instance.setActiveChat(null);
+    }
     _scrollController.dispose();
     _connSub?.cancel();
+    _activitySub?.cancel();
     _channelHandler?.dispose();
     _textController.dispose();
     super.dispose();
   }
 
-  Future<void> _loadPeerAndSetupChannel() async {
+  Future<void> _loadPeer() async {
     final repo = ref.read(peerRepositoryProvider);
     final peer = await repo.getPeerById(widget.peerId);
     if (!mounted) return;
     setState(() => _peer = peer);
-    if (_peer == null) return;
-
-    final dc = PeerConnectionPool.instance.getChannel(widget.peerId);
-    if (dc == null) return;
-
-    _channelHandler = RtcChannelHandler();
-    dc.onMessage = _channelHandler!.onMessage;
-    _channelHandler!.incomingPayloads.listen(_handleIncomingPayload);
-  }
-
-  Future<void> _handleIncomingPayload(Uint8List payload) async {
-    try {
-      final jsonString = utf8.decode(payload);
-      final jsonMap = jsonDecode(jsonString) as Map<String, dynamic>;
-
-      // Handle unpair control message
-      if (jsonMap['type'] == AppConstants.msgTypeUnpair) {
-        final remotePeerId =
-            (jsonMap['peerId'] as String?) ?? widget.peerId;
-        if (mounted) {
-          ref
-              .read(conversationProvider.notifier)
-              .onUnpairReceived(remotePeerId);
-          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            content: Text(
-                "Peer '${_peer?.displayName ?? remotePeerId}' removed you."),
-          ));
-          context.pop();
-        }
-        return;
-      }
-
-      // Encrypted text message
-      if (jsonMap['type'] == AppConstants.msgTypeText) {
-        final envelope = TextEnvelope.fromJson(jsonMap);
-        final privateKey = await KeyStore.instance.getOwnPrivateKey();
-        final decrypted = await HybridCipher.decrypt(
-          privateKey,
-          base64Decode(envelope.encryptedKey),
-          base64Decode(envelope.iv),
-          base64Decode(envelope.ciphertext),
-        );
-        final text = utf8.decode(decrypted);
-        if (mounted) {
-          ref.read(conversationProvider.notifier).onTextReceived(
-                widget.peerId,
-                TextMessage(
-                  messageId: envelope.messageId,
-                  senderId: envelope.senderId,
-                  text: text,
-                  // Stamp our own receive time so ordering is consistent across
-                  // devices regardless of clock skew.
-                  localAt: DateTime.now(),
-                  isMine: false,
-                ),
-              );
-
-          final settings = await SettingsRepository().getSettings();
-          if (settings.notificationsEnabled) {
-            await NotificationService.instance.showTextReceivedNotification(
-              senderName: _peer?.displayName ?? 'Someone',
-              messageId: envelope.messageId,
-              peerId: widget.peerId,
-            );
-          }
-        }
-        return;
-      }
-
-      // Encrypted view-once video
-      if (jsonMap['type'] == AppConstants.msgTypeVideo) {
-        final venv = VideoEnvelope.fromJson(jsonMap);
-        final privateKey = await KeyStore.instance.getOwnPrivateKey();
-        final ct = base64Decode(venv.ciphertext);
-        final decrypted = await HybridCipher.decrypt(
-          privateKey,
-          base64Decode(venv.encryptedKey),
-          base64Decode(venv.iv),
-          ct,
-        );
-        ct.fillRange(0, ct.length, 0);
-        if (mounted) {
-          ref.read(conversationProvider.notifier).onVideoReceived(
-                widget.peerId,
-                VideoMessage(
-                  messageId: venv.messageId,
-                  senderId: venv.senderId,
-                  videoBytes: Uint8List.fromList(decrypted),
-                  receivedAt: DateTime.now(),
-                  durationMs: venv.durationMs,
-                ),
-              );
-          final settings = await SettingsRepository().getSettings();
-          if (settings.notificationsEnabled) {
-            await NotificationService.instance.showVideoReceivedNotification(
-              senderName: _peer?.displayName ?? 'Someone',
-              messageId: venv.messageId,
-              peerId: widget.peerId,
-            );
-          }
-        }
-        return;
-      }
-
-      if (jsonMap['type'] != AppConstants.msgTypeImage) return;
-
-      final envelope = ImageEnvelope.fromJson(jsonMap);
-
-      final encryptedKeyBytes = base64Decode(envelope.encryptedKey);
-      final ivBytes = base64Decode(envelope.iv);
-      final ciphertextBytes = base64Decode(envelope.ciphertext);
-
-      final privateKey = await KeyStore.instance.getOwnPrivateKey();
-      final decryptedBytes = await HybridCipher.decrypt(
-        privateKey,
-        encryptedKeyBytes,
-        ivBytes,
-        ciphertextBytes,
-      );
-
-      // Zero-fill ciphertext bytes once decrypted
-      ciphertextBytes.fillRange(0, ciphertextBytes.length, 0);
-
-      final msg = ImageMessage(
-        messageId: envelope.messageId,
-        senderId: envelope.senderId,
-        imageBytes: Uint8List.fromList(decryptedBytes),
-        receivedAt: DateTime.now(),
-      );
-
-      if (mounted) {
-        ref
-            .read(conversationProvider.notifier)
-            .onImageReceived(widget.peerId, msg);
-
-        // Show notification (respects user setting)
-        final settings = await SettingsRepository().getSettings();
-        if (settings.notificationsEnabled) {
-          await NotificationService.instance.showImageReceivedNotification(
-            senderName: _peer?.displayName ?? 'Someone',
-            messageId: msg.messageId,
-            peerId: widget.peerId,
-          );
-        }
-      }
-    } catch (e) {
-      if (kDebugMode) debugPrint('Failed to process incoming payload: $e');
-    }
   }
 
   Future<void> _pickAndSendImage(ImageSource source) async {
@@ -478,12 +373,30 @@ class _ConversationScreenState extends ConsumerState<ConversationScreen>
       if (count(next) > count(prev)) _scrollToBottom();
     });
 
+    // Leave the chat if the peer was removed remotely (unpaired by them) while
+    // it is open. The router does the teardown; we just exit the dead screen.
+    ref.listen(peersProvider, (prev, next) {
+      next.whenData((peers) {
+        if (_leaving || !mounted) return;
+        if (!peers.any((p) => p.id == widget.peerId)) {
+          _leaving = true;
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(
+                "Peer '${_peer?.displayName ?? 'peer'}' is no longer paired."),
+          ));
+          context.pop();
+        }
+      });
+    });
+
     if (_peer == null) {
       return const Scaffold(
           body: Center(child: CircularProgressIndicator()));
     }
 
     final isOnline = PeerConnectionPool.instance.isOnline(widget.peerId);
+    final isReconnecting = !isOnline &&
+        LocalReconnectService.instance.isReconnecting(widget.peerId);
     final convo = ref.watch(conversationProvider);
     final pendingMessages = convo.pendingByPeer[widget.peerId] ?? [];
     final pendingVideos = convo.pendingVideosByPeer[widget.peerId] ?? [];
@@ -505,7 +418,10 @@ class _ConversationScreenState extends ConsumerState<ConversationScreen>
             Text(_peer!.displayName),
             const SizedBox(width: 8),
             Icon(Icons.circle,
-                color: isOnline ? Colors.green : Colors.grey, size: 10),
+                color: isOnline
+                    ? Colors.green
+                    : (isReconnecting ? Colors.orange : Colors.grey),
+                size: 10),
           ],
         ),
         actions: [
@@ -528,10 +444,43 @@ class _ConversationScreenState extends ConsumerState<ConversationScreen>
               color: Colors.orange.withAlpha(40),
               padding:
                   const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              child: const Text(
-                'Peer is offline — connect first to send messages.',
-                style: TextStyle(color: Colors.orange),
-              ),
+              child: isReconnecting
+                  ? Row(
+                      children: const [
+                        SizedBox(
+                          width: 14,
+                          height: 14,
+                          child: CircularProgressIndicator(
+                              strokeWidth: 2, color: Colors.orange),
+                        ),
+                        SizedBox(width: 10),
+                        Text('Reconnecting…',
+                            style: TextStyle(color: Colors.orange)),
+                      ],
+                    )
+                  : Row(
+                      children: [
+                        const Expanded(
+                          child: Text(
+                            'Peer is offline.',
+                            style: TextStyle(color: Colors.orange),
+                          ),
+                        ),
+                        TextButton.icon(
+                          onPressed: () => LocalReconnectService.instance
+                              .reconnectPeer(_peer!),
+                          icon: const Icon(Icons.wifi_protected_setup,
+                              size: 18, color: Colors.orange),
+                          label: const Text('Reconnect',
+                              style: TextStyle(color: Colors.orange)),
+                          style: TextButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(horizontal: 8),
+                            minimumSize: const Size(0, 32),
+                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                          ),
+                        ),
+                      ],
+                    ),
             ),
           Container(
             width: double.infinity,
@@ -679,7 +628,9 @@ class _ConversationScreenState extends ConsumerState<ConversationScreen>
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             SelectableText(msg.text,
-                style: const TextStyle(color: Color(0xFFF1F1F7))),
+                style: const TextStyle(
+                    color: Color(0xFFF1F1F7),
+                    fontFamilyFallback: ['NotoColorEmoji'])),
             const SizedBox(height: 2),
             Text('$hh:$mm',
                 style: const TextStyle(

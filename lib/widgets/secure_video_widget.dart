@@ -10,13 +10,9 @@ import 'package:video_player/video_player.dart';
 class SecureVideoWidget extends StatefulWidget {
   final Uint8List videoBytes;
 
-  /// Called once when playback reaches the end.
-  final VoidCallback? onCompleted;
-
   const SecureVideoWidget({
     super.key,
     required this.videoBytes,
-    this.onCompleted,
   });
 
   @override
@@ -26,7 +22,6 @@ class SecureVideoWidget extends StatefulWidget {
 class _SecureVideoWidgetState extends State<SecureVideoWidget> {
   HttpServer? _server;
   VideoPlayerController? _controller;
-  bool _completedFired = false;
   String? _error;
 
   @override
@@ -46,23 +41,16 @@ class _SecureVideoWidgetState extends State<SecureVideoWidget> {
       final url = 'http://${server.address.address}:${server.port}/v.mp4';
       final controller = VideoPlayerController.networkUrl(Uri.parse(url));
       _controller = controller;
-      controller.addListener(_onTick);
       await controller.initialize();
-      await controller.setLooping(false);
+      // Loop continuously: a view-once video keeps replaying until the viewer
+      // closes it manually (or backgrounds the app), rather than auto-dismissing
+      // the instant it reaches the end.
+      await controller.setLooping(true);
       await controller.play();
       if (mounted) setState(() {});
     } catch (e) {
       if (kDebugMode) debugPrint('[SecureVideo] setup failed: $e');
       if (mounted) setState(() => _error = 'Could not play this video.');
-    }
-  }
-
-  void _onTick() {
-    final c = _controller;
-    if (c == null || !c.value.isInitialized) return;
-    if (c.value.isCompleted && !_completedFired) {
-      _completedFired = true;
-      widget.onCompleted?.call();
     }
   }
 
@@ -104,7 +92,6 @@ class _SecureVideoWidgetState extends State<SecureVideoWidget> {
 
   @override
   void dispose() {
-    _controller?.removeListener(_onTick);
     _controller?.dispose();
     _server?.close(force: true);
     // Zero-fill the decrypted video so it doesn't linger in memory.

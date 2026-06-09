@@ -18,40 +18,54 @@ class PeerTile extends ConsumerStatefulWidget {
 }
 
 class _PeerTileState extends ConsumerState<PeerTile> {
-  late StreamSubscription<void> _connSub;
+  StreamSubscription<void>? _connSub;
+  StreamSubscription<void>? _activitySub;
   bool _isOnline = false;
-  bool _isConnecting = false;
+  bool _isReconnecting = false;
 
   @override
   void initState() {
     super.initState();
-    _isOnline = PeerConnectionPool.instance.isOnline(widget.peer.id);
+    _syncStatus();
+    // Connection up/down events from the pool…
     _connSub = PeerConnectionPool.instance.onConnectionChange.listen((_) {
-      final online = PeerConnectionPool.instance.isOnline(widget.peer.id);
-      if (mounted && online != _isOnline) {
-        setState(() {
-          _isOnline = online;
-          if (online) _isConnecting = false;
-        });
-      }
+      _syncStatus();
     });
+    // …and the reconnect service's in-flight attempt signal.
+    _activitySub =
+        LocalReconnectService.instance.onReconnectActivity.listen((_) {
+      _syncStatus();
+    });
+  }
+
+  /// Pull the latest online / reconnecting status and rebuild only on a change.
+  void _syncStatus() {
+    final online = PeerConnectionPool.instance.isOnline(widget.peer.id);
+    final reconnecting =
+        !online && LocalReconnectService.instance.isReconnecting(widget.peer.id);
+    if (mounted && (online != _isOnline || reconnecting != _isReconnecting)) {
+      setState(() {
+        _isOnline = online;
+        _isReconnecting = reconnecting;
+      });
+    }
   }
 
   @override
   void dispose() {
-    _connSub.cancel();
+    _connSub?.cancel();
+    _activitySub?.cancel();
     super.dispose();
   }
 
   Future<void> _connect() async {
-    setState(() => _isConnecting = true);
+    // The reconnect-activity stream drives the spinner; just kick the attempt.
     await LocalReconnectService.instance.reconnectPeer(widget.peer);
-    // Reset spinner after a timeout if connection never came up
-    await Future.delayed(const Duration(seconds: 15));
-    if (mounted && !PeerConnectionPool.instance.isOnline(widget.peer.id)) {
-      setState(() => _isConnecting = false);
-    }
   }
+
+  Color get _statusColor => _isOnline
+      ? Colors.green
+      : (_isReconnecting ? Colors.orange : Colors.grey);
 
   @override
   Widget build(BuildContext context) {
@@ -71,17 +85,22 @@ class _PeerTileState extends ConsumerState<PeerTile> {
         mainAxisSize: MainAxisSize.min,
         children: [
           if (pendingCount > 0) ...[_badge(pendingCount), const SizedBox(width: 8)],
-          _isConnecting
-              ? const SizedBox(
-                  width: 24,
-                  height: 24,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                )
-              : IconButton(
-                  icon: const Icon(Icons.wifi_protected_setup),
-                  tooltip: 'Connect',
-                  onPressed: _connect,
-                ),
+          if (_isReconnecting)
+            const Tooltip(
+              message: 'Reconnecting…',
+              child: SizedBox(
+                width: 24,
+                height: 24,
+                child: CircularProgressIndicator(
+                    strokeWidth: 2, color: Colors.orange),
+              ),
+            )
+          else
+            IconButton(
+              icon: const Icon(Icons.wifi_protected_setup),
+              tooltip: 'Connect',
+              onPressed: _connect,
+            ),
         ],
       );
     }
@@ -131,7 +150,7 @@ class _PeerTileState extends ConsumerState<PeerTile> {
                 width: 12,
                 height: 12,
                 decoration: BoxDecoration(
-                  color: _isOnline ? Colors.green : Colors.grey,
+                  color: _statusColor,
                   shape: BoxShape.circle,
                   border: Border.all(
                       color: Theme.of(context).scaffoldBackgroundColor,
@@ -143,7 +162,15 @@ class _PeerTileState extends ConsumerState<PeerTile> {
         ),
         title: Text(widget.peer.displayName),
         subtitle: Text(
-            'Paired ${widget.peer.pairedAt.toLocal().toString().split('.')[0]}'),
+          _isOnline
+              ? 'Connected'
+              : (_isReconnecting
+                  ? 'Reconnecting…'
+                  : 'Offline · Paired ${widget.peer.pairedAt.toLocal().toString().split('.')[0]}'),
+          style: TextStyle(
+            color: _isReconnecting ? Colors.orange : null,
+          ),
+        ),
         trailing: trailing,
         onTap: () => context.push('/conversation/${widget.peer.id}'),
       ),
