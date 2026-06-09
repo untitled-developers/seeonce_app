@@ -1,0 +1,131 @@
+import 'dart:io';
+import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
+import 'package:video_player/video_player.dart';
+
+/// Plays a view-once video entirely from memory: a loopback HTTP server on
+/// 127.0.0.1 streams the decrypted bytes to [video_player] so the clip never
+/// touches disk (matching the image's see-once guarantee). On dispose the
+/// server is closed, the controller released and the bytes zero-filled.
+class SecureVideoWidget extends StatefulWidget {
+  final Uint8List videoBytes;
+
+  /// Called once when playback reaches the end.
+  final VoidCallback? onCompleted;
+
+  const SecureVideoWidget({
+    super.key,
+    required this.videoBytes,
+    this.onCompleted,
+  });
+
+  @override
+  State<SecureVideoWidget> createState() => _SecureVideoWidgetState();
+}
+
+class _SecureVideoWidgetState extends State<SecureVideoWidget> {
+  HttpServer? _server;
+  VideoPlayerController? _controller;
+  bool _completedFired = false;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _setup();
+  }
+
+  Future<void> _setup() async {
+    try {
+      // Bind to loopback on a random free port; only this device can reach it.
+      final server =
+          await HttpServer.bind(InternetAddress.loopbackIPv4, 0, shared: true);
+      _server = server;
+      server.listen(_handleRequest);
+
+      final url = 'http://${server.address.address}:${server.port}/v.mp4';
+      final controller = VideoPlayerController.networkUrl(Uri.parse(url));
+      _controller = controller;
+      controller.addListener(_onTick);
+      await controller.initialize();
+      await controller.setLooping(false);
+      await controller.play();
+      if (mounted) setState(() {});
+    } catch (e) {
+      if (kDebugMode) debugPrint('[SecureVideo] setup failed: $e');
+      if (mounted) setState(() => _error = 'Could not play this video.');
+    }
+  }
+
+  void _onTick() {
+    final c = _controller;
+    if (c == null || !c.value.isInitialized) return;
+    if (c.value.isCompleted && !_completedFired) {
+      _completedFired = true;
+      widget.onCompleted?.call();
+    }
+  }
+
+  Future<void> _handleRequest(HttpRequest request) async {
+    final bytes = widget.videoBytes;
+    final total = bytes.length;
+    final res = request.response;
+    try {
+      res.headers.set(HttpHeaders.acceptRangesHeader, 'bytes');
+      res.headers.contentType = ContentType('video', 'mp4');
+
+      final range = request.headers.value(HttpHeaders.rangeHeader);
+      if (range != null && range.startsWith('bytes=') && total > 0) {
+        final spec = range.substring(6).split('-');
+        var start = int.tryParse(spec[0]) ?? 0;
+        var end = (spec.length > 1 && spec[1].isNotEmpty)
+            ? (int.tryParse(spec[1]) ?? total - 1)
+            : total - 1;
+        if (start < 0) start = 0;
+        if (end >= total) end = total - 1;
+        if (start > end) start = end;
+        final chunk = bytes.sublist(start, end + 1);
+        res.statusCode = HttpStatus.partialContent;
+        res.headers
+            .set(HttpHeaders.contentRangeHeader, 'bytes $start-$end/$total');
+        res.headers.contentLength = chunk.length;
+        res.add(chunk);
+      } else {
+        res.statusCode = HttpStatus.ok;
+        res.headers.contentLength = total;
+        res.add(bytes);
+      }
+    } catch (_) {
+      res.statusCode = HttpStatus.internalServerError;
+    } finally {
+      await res.close();
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller?.removeListener(_onTick);
+    _controller?.dispose();
+    _server?.close(force: true);
+    // Zero-fill the decrypted video so it doesn't linger in memory.
+    widget.videoBytes.fillRange(0, widget.videoBytes.length, 0);
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_error != null) {
+      return Center(
+        child: Text(_error!, style: const TextStyle(color: Colors.white70)),
+      );
+    }
+    final c = _controller;
+    if (c == null || !c.value.isInitialized) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    return AspectRatio(
+      aspectRatio: c.value.aspectRatio <= 0 ? 16 / 9 : c.value.aspectRatio,
+      child: VideoPlayer(c),
+    );
+  }
+}
