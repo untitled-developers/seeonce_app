@@ -1,0 +1,52 @@
+name: Build APK
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build obfuscated release APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.41.1'
+          channel: stable
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      # --obfuscate scrambles Dart symbol names in the AOT snapshot;
+      # --split-debug-info writes the symbol maps needed to de-obfuscate
+      # crash stack traces (flutter symbolize). Without those maps a release
+      # crash is unreadable, so they are uploaded as a separate artifact.
+      - name: Build obfuscated release APK
+        run: flutter build apk --release --obfuscate --split-debug-info=build/symbols
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: seeonce-release-apk
+          path: build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
+
+      - name: Upload de-obfuscation symbols
+        uses: actions/upload-artifact@v4
+        with:
+          name: obfuscation-symbols
+          path: build/symbols
+          if-no-files-found: error

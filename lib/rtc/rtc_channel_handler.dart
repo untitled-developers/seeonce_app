@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import '../../core/constants.dart';
+import '../../core/errors.dart';
 
 class _ChunkBuffer {
   final int totalChunks;
@@ -61,6 +62,15 @@ class RtcChannelHandler {
     _sweepTimer = Timer.periodic(_bufferTtl, (_) => sweepStaleBuffers());
   }
 
+  /// Backpressure: pause sending while more than this is queued in the data
+  /// channel's native buffer. SCTP buffers are finite; letting the queue grow
+  /// unboundedly risks both memory spikes and channel closure on overflow.
+  static const int _sendHighWaterMark = 1 << 20; // 1 MB
+
+  /// Upper bound on a single backpressure wait. If the buffer hasn't drained
+  /// in this long the link is effectively dead — fail instead of hanging.
+  static const Duration _drainTimeout = Duration(seconds: 30);
+
   Future<void> sendEncryptedPayload({
     required RTCDataChannel dc,
     required Uint8List encryptedPayload,
@@ -69,6 +79,9 @@ class RtcChannelHandler {
   }) async {
     final chunkSize = AppConstants.dataChannelChunkSize;
     final totalChunks = (encryptedPayload.length / chunkSize).ceil();
+    final msgIdBytes = utf8.encode(messageId);
+
+    _ensureOpen(dc);
 
     // 1. Send Header
     final header = {
@@ -85,10 +98,7 @@ class RtcChannelHandler {
           ? encryptedPayload.length
           : start + chunkSize;
 
-      final chunkData = encryptedPayload.sublist(start, end);
-
       // Frame layout: [messageIdLength(1)][messageId(bytes)][chunkIndex(4)][chunkData]
-      final msgIdBytes = utf8.encode(messageId);
       final builder = BytesBuilder();
       builder.addByte(msgIdBytes.length);
       builder.add(msgIdBytes);
@@ -97,15 +107,32 @@ class RtcChannelHandler {
       indexData.setInt32(0, i, Endian.big);
       builder.add(indexData.buffer.asUint8List());
 
-      builder.add(chunkData);
+      builder.add(Uint8List.sublistView(encryptedPayload, start, end));
 
-      // Basic flow control: wait if buffer gets too large
-      if (dc.bufferedAmount != null && dc.bufferedAmount! > 1024 * 1024 * 8) {
-        // > 8MB
-        await Future.delayed(const Duration(milliseconds: 100));
-      }
-
+      await _waitForDrain(dc);
+      _ensureOpen(dc);
       await dc.send(RTCDataChannelMessage.fromBinary(builder.toBytes()));
+    }
+  }
+
+  void _ensureOpen(RTCDataChannel dc) {
+    if (dc.state != RTCDataChannelState.RTCDataChannelOpen) {
+      throw const ConnectionError('Connection lost while sending.');
+    }
+  }
+
+  /// Waits until the channel's buffered amount falls below the high-water
+  /// mark, so large payloads (videos) stream at the rate the link can take.
+  Future<void> _waitForDrain(RTCDataChannel dc) async {
+    var waited = Duration.zero;
+    const step = Duration(milliseconds: 20);
+    while ((dc.bufferedAmount ?? 0) > _sendHighWaterMark) {
+      if (dc.state != RTCDataChannelState.RTCDataChannelOpen ||
+          waited >= _drainTimeout) {
+        throw const ConnectionError('Connection stalled while sending.');
+      }
+      await Future.delayed(step);
+      waited += step;
     }
   }
 

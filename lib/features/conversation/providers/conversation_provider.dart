@@ -162,12 +162,18 @@ class ConversationNotifier extends StateNotifier<ConversationState> {
     final peerRepo = ref.read(peerRepositoryProvider);
     await peerRepo.deletePeer(remotePeerId);
 
-    // 3. Clear messages (images + videos + text)
+    // 3. Clear messages (images + videos + text), zero-filling decrypted media
+    // bytes on the way out — dropping the references alone would leave the
+    // plaintext in memory until the GC happens to reclaim it.
     final pending = Map<String, List<ImageMessage>>.from(state.pendingByPeer);
-    pending.remove(remotePeerId);
+    for (final m in pending.remove(remotePeerId) ?? const <ImageMessage>[]) {
+      m.imageBytes.fillRange(0, m.imageBytes.length, 0);
+    }
     final videos =
         Map<String, List<VideoMessage>>.from(state.pendingVideosByPeer);
-    videos.remove(remotePeerId);
+    for (final m in videos.remove(remotePeerId) ?? const <VideoMessage>[]) {
+      m.videoBytes.fillRange(0, m.videoBytes.length, 0);
+    }
     final texts = Map<String, List<TextMessage>>.from(state.messagesByPeer);
     texts.remove(remotePeerId);
     state = state.copyWith(

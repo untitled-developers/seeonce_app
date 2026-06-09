@@ -58,6 +58,7 @@ class ConnectionSupervisor {
   StreamSubscription<void>? _poolSub;
   final Map<String, _Backoff> _backoff = {};
   bool _running = false;
+  bool _sweeping = false;
 
   void start({required PeerRepository peerRepository}) {
     if (_running) return;
@@ -92,23 +93,33 @@ class ConnectionSupervisor {
   /// has elapsed; resets backoff for peers that are healthy. Public for tests.
   @visibleForTesting
   Future<void> superviseOnce(DateTime now) async {
-    final peers = await (_loadPeersOverride?.call() ??
-        _repo?.getAllPeers() ??
-        Future.value(<Peer>[]));
-    for (final p in peers) {
-      if (_isOnline(p.id)) {
-        _backoff.remove(p.id); // healthy — reset
-        continue;
+    // Pool change events can fire mid-sweep (a reconnect succeeding triggers
+    // one); without this guard sweeps overlap and double-fire attempts.
+    if (_sweeping) return;
+    _sweeping = true;
+    try {
+      final peers = await (_loadPeersOverride?.call() ??
+          _repo?.getAllPeers() ??
+          Future.value(<Peer>[]));
+      for (final p in peers) {
+        if (_isOnline(p.id)) {
+          _backoff.remove(p.id); // healthy — reset
+          continue;
+        }
+        final b = _backoff[p.id];
+        if (b != null && now.isBefore(b.nextAttempt)) continue; // within backoff
+        final attempt = (b?.attempt ?? 0) + 1;
+        _backoff[p.id] = _Backoff(attempt, now.add(backoffFor(attempt)));
+        try {
+          await _reconnect(p);
+        } catch (e) {
+          if (kDebugMode) {
+            debugPrint('[Supervisor] reconnect ${p.id} failed: $e');
+          }
+        }
       }
-      final b = _backoff[p.id];
-      if (b != null && now.isBefore(b.nextAttempt)) continue; // within backoff
-      final attempt = (b?.attempt ?? 0) + 1;
-      _backoff[p.id] = _Backoff(attempt, now.add(backoffFor(attempt)));
-      try {
-        await _reconnect(p);
-      } catch (e) {
-        if (kDebugMode) debugPrint('[Supervisor] reconnect ${p.id} failed: $e');
-      }
+    } finally {
+      _sweeping = false;
     }
   }
 
