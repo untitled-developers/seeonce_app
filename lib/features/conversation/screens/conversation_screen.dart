@@ -11,6 +11,7 @@ import 'package:uuid/uuid.dart';
 
 import '../../../core/constants.dart';
 import '../../../core/errors.dart';
+import '../../../core/theme.dart';
 import '../../../data/models/image_message.dart';
 import '../../../data/models/peer.dart';
 import '../../../data/models/text_message.dart';
@@ -419,8 +420,10 @@ class _ConversationScreenState extends ConsumerState<ConversationScreen>
             const SizedBox(width: 8),
             Icon(Icons.circle,
                 color: isOnline
-                    ? Colors.green
-                    : (isReconnecting ? Colors.orange : Colors.grey),
+                    ? AppColors.online
+                    : (isReconnecting
+                        ? AppColors.reconnecting
+                        : AppColors.offline),
                 size: 10),
           ],
         ),
@@ -441,21 +444,21 @@ class _ConversationScreenState extends ConsumerState<ConversationScreen>
           if (!isOnline)
             Container(
               width: double.infinity,
-              color: Colors.orange.withAlpha(40),
+              color: AppColors.reconnecting.withAlpha(38),
               padding:
                   const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
               child: isReconnecting
-                  ? Row(
-                      children: const [
+                  ? const Row(
+                      children: [
                         SizedBox(
                           width: 14,
                           height: 14,
                           child: CircularProgressIndicator(
-                              strokeWidth: 2, color: Colors.orange),
+                              strokeWidth: 2, color: AppColors.reconnecting),
                         ),
                         SizedBox(width: 10),
                         Text('Reconnecting…',
-                            style: TextStyle(color: Colors.orange)),
+                            style: TextStyle(color: AppColors.reconnecting)),
                       ],
                     )
                   : Row(
@@ -463,16 +466,16 @@ class _ConversationScreenState extends ConsumerState<ConversationScreen>
                         const Expanded(
                           child: Text(
                             'Peer is offline.',
-                            style: TextStyle(color: Colors.orange),
+                            style: TextStyle(color: AppColors.reconnecting),
                           ),
                         ),
                         TextButton.icon(
                           onPressed: () => LocalReconnectService.instance
                               .reconnectPeer(_peer!),
                           icon: const Icon(Icons.wifi_protected_setup,
-                              size: 18, color: Colors.orange),
+                              size: 18, color: AppColors.reconnecting),
                           label: const Text('Reconnect',
-                              style: TextStyle(color: Colors.orange)),
+                              style: TextStyle(color: AppColors.reconnecting)),
                           style: TextButton.styleFrom(
                             padding: const EdgeInsets.symmetric(horizontal: 8),
                             minimumSize: const Size(0, 32),
@@ -484,18 +487,29 @@ class _ConversationScreenState extends ConsumerState<ConversationScreen>
             ),
           Container(
             width: double.infinity,
-            color: const Color(0xFF7B61FF).withAlpha(25),
+            color: AppColors.primary.withAlpha(30),
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-            child: const Text(
-              'Messages are encrypted and disappear 30 minutes after they are sent.',
-              style: TextStyle(color: Color(0xFF9B89FF), fontSize: 12),
+            child: Row(
+              children: [
+                const Icon(Icons.lock_outline,
+                    size: 14, color: AppColors.primaryMuted),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Messages are encrypted and disappear 30 minutes after they are sent.',
+                    style: TextStyle(
+                        color: AppColors.primaryMuted.withAlpha(230),
+                        fontSize: 12),
+                  ),
+                ),
+              ],
             ),
           ),
           Expanded(
             child: timeline.isEmpty
                 ? const Center(
                     child: Text('No messages yet.',
-                        style: TextStyle(color: Colors.grey)))
+                        style: TextStyle(color: AppColors.textMuted)))
                 : ListView.builder(
                     controller: _scrollController,
                     padding: const EdgeInsets.all(8),
@@ -538,7 +552,10 @@ class _ConversationScreenState extends ConsumerState<ConversationScreen>
                   IconButton(
                     tooltip: 'Send',
                     onPressed: isOnline ? _sendText : null,
-                    icon: const Icon(Icons.send, color: Color(0xFF7B61FF)),
+                    icon: Icon(Icons.send,
+                        color: isOnline
+                            ? AppColors.primary
+                            : AppColors.offline),
                   ),
                 ],
               ),
@@ -574,9 +591,10 @@ class _ConversationScreenState extends ConsumerState<ConversationScreen>
   Widget _videoTile(VideoMessage msg) {
     final secs = (msg.durationMs / 1000).round();
     return Card(
+      color: AppColors.surfaceContainerHigh,
       margin: const EdgeInsets.symmetric(vertical: 4),
       child: ListTile(
-        leading: const Icon(Icons.play_circle_fill, color: Color(0xFF7B61FF)),
+        leading: const Icon(Icons.play_circle_fill, color: AppColors.primary),
         title: const Text('Tap to view video'),
         subtitle: Text(secs > 0 ? 'Video · ${secs}s · view once' : 'View once'),
         onTap: () {
@@ -591,9 +609,10 @@ class _ConversationScreenState extends ConsumerState<ConversationScreen>
 
   Widget _imageTile(ImageMessage msg) {
     return Card(
+      color: AppColors.surfaceContainerHigh,
       margin: const EdgeInsets.symmetric(vertical: 4),
       child: ListTile(
-        leading: const Icon(Icons.image, color: Color(0xFF7B61FF)),
+        leading: const Icon(Icons.image, color: AppColors.primary),
         title: const Text('Tap to view image'),
         subtitle: Text(
           'Received ${msg.receivedAt.toLocal().toString().split('.')[0]}',
@@ -612,6 +631,13 @@ class _ConversationScreenState extends ConsumerState<ConversationScreen>
     final local = msg.localAt.toLocal();
     final hh = local.hour.toString().padLeft(2, '0');
     final mm = local.minute.toString().padLeft(2, '0');
+    // Distinct bubble surfaces with adequate contrast: the received bubble was
+    // 0xFF12121A, all but invisible against the 0xFF0A0A0F background.
+    final bubbleColor =
+        msg.isMine ? AppColors.primary : AppColors.surfaceContainerHigh;
+    final textColor = msg.isMine ? Colors.white : AppColors.textPrimary;
+    final timeColor =
+        msg.isMine ? Colors.white.withAlpha(190) : AppColors.textMuted;
     return Align(
       alignment: msg.isMine ? Alignment.centerRight : Alignment.centerLeft,
       child: Container(
@@ -619,22 +645,24 @@ class _ConversationScreenState extends ConsumerState<ConversationScreen>
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         constraints: const BoxConstraints(maxWidth: 280),
         decoration: BoxDecoration(
-          color: msg.isMine
-              ? const Color(0xFF7B61FF)
-              : const Color(0xFF12121A),
-          borderRadius: BorderRadius.circular(14),
+          color: bubbleColor,
+          borderRadius: BorderRadius.only(
+            topLeft: const Radius.circular(16),
+            topRight: const Radius.circular(16),
+            bottomLeft: Radius.circular(msg.isMine ? 16 : 4),
+            bottomRight: Radius.circular(msg.isMine ? 4 : 16),
+          ),
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             SelectableText(msg.text,
-                style: const TextStyle(
-                    color: Color(0xFFF1F1F7),
-                    fontFamilyFallback: ['NotoColorEmoji'])),
+                style: TextStyle(
+                    color: textColor,
+                    fontFamilyFallback: const ['NotoColorEmoji'])),
             const SizedBox(height: 2),
             Text('$hh:$mm',
-                style: const TextStyle(
-                    color: Color(0xFF9090A0), fontSize: 10)),
+                style: TextStyle(color: timeColor, fontSize: 10)),
           ],
         ),
       ),

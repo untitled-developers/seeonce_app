@@ -60,6 +60,8 @@ Senders compress → encrypt → chunk → send: `image_sender` (+ `image_compre
 
 Handshake/wire changes require both devices to run a matching build and may force re-pairing. Existing on-wire choices that are load-bearing: RSA-OAEP uses SHA-256 (not the SHA-1 default), reconnect key-hash IDs are the full 256-bit hash, and reconnect includes an `auth_challenge`/`auth_response` step. Changing any of these is a breaking protocol change.
 
+The reconnect auth handshake is **v2** (`_authProtocolVersion` in `local_reconnect_service.dart`). v2 signs `nonce || channelBinding` rather than the bare nonce, where `channelBinding` is a SHA-256 over the two DTLS certificate fingerprints (sorted) pulled from the local/remote SDP. This binds the proof-of-key-possession to the specific DTLS connection, so a LAN relay/MITM — which must terminate DTLS with its own certificate on each leg — is detected (the fingerprints, and therefore the binding, won't match). v2 peers refuse to authenticate with v1 peers, so upgrading one side forces a re-pair. Bump the version on any further change to the signed material.
+
 ## Reference
 
 `IMPLEMENTATION_PLAN.md` (repo root) and the "Security notes" section of `README.md` contain deeper rationale for the trust model, platform differences, and ephemerality guarantees.

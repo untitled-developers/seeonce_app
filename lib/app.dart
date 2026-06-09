@@ -3,8 +3,9 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import 'package:google_fonts/google_fonts.dart';
 import 'package:no_screenshot/no_screenshot.dart';
+
+import 'core/theme.dart';
 
 import 'crypto/key_store.dart';
 import 'data/repositories/peer_repository.dart';
@@ -155,35 +156,7 @@ class _SeeOnceAppState extends ConsumerState<SeeOnceApp>
     return MaterialApp.router(
       title: 'SeeOnce',
       themeMode: ThemeMode.dark,
-      darkTheme: ThemeData(
-        brightness: Brightness.dark,
-        scaffoldBackgroundColor: const Color(0xFF0A0A0F),
-        colorScheme: const ColorScheme.dark(
-          surface: Color(0xFF12121A),
-          primary: Color(0xFF7B61FF), // Accent
-          secondary: Color(0xFF9B89FF),
-          onSurface: Color(0xFFF1F1F7),
-          error: Color(0xFFEF4444),
-        ),
-        // Bundle Noto color-emoji as a fallback so emoji render the same on
-        // every device — older Androids lack newer glyphs and showed boxes.
-        textTheme: GoogleFonts.interTextTheme(ThemeData.dark().textTheme)
-            .apply(fontFamilyFallback: const ['NotoColorEmoji']).copyWith(
-          bodyMedium: const TextStyle(
-              color: Color(0xFFF1F1F7),
-              fontFamilyFallback: ['NotoColorEmoji']),
-          bodySmall: const TextStyle(
-              color: Color(0xFF9090A0),
-              fontFamilyFallback: ['NotoColorEmoji']),
-        ),
-        snackBarTheme: const SnackBarThemeData(
-          behavior: SnackBarBehavior.floating,
-        ),
-        appBarTheme: const AppBarTheme(
-          backgroundColor: Color(0xFF0A0A0F),
-          elevation: 0,
-        ),
-      ),
+      darkTheme: buildAppTheme(),
       routerConfig: _router,
       // Overlay a setup screen until bootstrap finishes. MaterialApp.builder
       // sits below the app's Directionality/MediaQuery, so a plain widget here
@@ -215,7 +188,7 @@ class _SetupScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFF0A0A0F),
+      backgroundColor: AppColors.background,
       body: Center(
         child: Padding(
           padding: const EdgeInsets.all(32),
@@ -227,27 +200,28 @@ class _SetupScreen extends StatelessWidget {
                 const SizedBox(height: 24),
                 const Text(
                   'Setting up encryption…',
-                  style: TextStyle(color: Color(0xFFF1F1F7), fontSize: 16),
+                  style: TextStyle(color: AppColors.textPrimary, fontSize: 16),
                 ),
                 const SizedBox(height: 8),
                 const Text(
                   'This only happens once and may take a moment.',
                   textAlign: TextAlign.center,
-                  style: TextStyle(color: Color(0xFF9090A0), fontSize: 13),
+                  style: TextStyle(color: AppColors.textMuted, fontSize: 13),
                 ),
               ] else ...[
                 const Icon(Icons.error_outline,
-                    color: Color(0xFFEF4444), size: 40),
+                    color: AppColors.error, size: 40),
                 const SizedBox(height: 16),
                 const Text(
                   'Setup failed',
-                  style: TextStyle(color: Color(0xFFF1F1F7), fontSize: 16),
+                  style: TextStyle(color: AppColors.textPrimary, fontSize: 16),
                 ),
                 const SizedBox(height: 8),
                 Text(
                   error!,
                   textAlign: TextAlign.center,
-                  style: const TextStyle(color: Color(0xFF9090A0), fontSize: 12),
+                  style: const TextStyle(
+                      color: AppColors.textMuted, fontSize: 12),
                 ),
               ],
             ],

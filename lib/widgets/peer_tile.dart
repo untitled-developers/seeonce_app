@@ -7,6 +7,7 @@ import 'package:flutter_webrtc/flutter_webrtc.dart' show RTCDataChannelMessage;
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 import '../core/constants.dart';
+import '../core/theme.dart';
 import '../data/models/peer.dart';
 import '../features/conversation/providers/conversation_provider.dart';
 import '../rtc/local_reconnect_service.dart';
@@ -68,8 +69,8 @@ class _PeerTileState extends ConsumerState<PeerTile> {
   }
 
   Color get _statusColor => _isOnline
-      ? Colors.green
-      : (_isReconnecting ? Colors.orange : Colors.grey);
+      ? AppColors.online
+      : (_isReconnecting ? AppColors.reconnecting : AppColors.offline);
 
   @override
   Widget build(BuildContext context) {
@@ -96,7 +97,7 @@ class _PeerTileState extends ConsumerState<PeerTile> {
                 width: 24,
                 height: 24,
                 child: CircularProgressIndicator(
-                    strokeWidth: 2, color: Colors.orange),
+                    strokeWidth: 2, color: AppColors.reconnecting),
               ),
             )
           else
@@ -186,7 +187,7 @@ class _PeerTileState extends ConsumerState<PeerTile> {
                   ? 'Reconnecting…'
                   : 'Offline · Paired ${DateFormat.yMMMd().format(widget.peer.pairedAt.toLocal())}'),
           style: TextStyle(
-            color: _isReconnecting ? Colors.orange : null,
+            color: _isReconnecting ? AppColors.reconnecting : null,
           ),
         ),
         trailing: trailing,

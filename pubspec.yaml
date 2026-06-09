@@ -49,9 +49,6 @@ dependencies:
   qr_flutter: ^4.1.0
   mobile_scanner: ^5.2.3
 
-  # Typography
-  google_fonts: ^6.2.1
-
   # Utilities
   uuid: ^4.5.1
   intl: ^0.20.2
@@ -72,10 +69,25 @@ flutter:
   uses-material-design: true
 
   fonts:
-    # Bundled color-emoji fallback (Noto COLRv1) so emoji render identically on
-    # every device. Older Androids ship an emoji font that lacks newer glyphs,
-    # which showed received emoji as empty boxes. Wired in as fontFamilyFallback
-    # in lib/app.dart.
+    # Inter, bundled locally. Previously the app pulled Inter at runtime via
+    # google_fonts; when the device was offline (or before the download
+    # finished on first launch) the primary font was missing and ALL text fell
+    # through to NotoColorEmoji — rendering digits as gradient emoji glyphs and
+    # letters with broken spacing. Bundling removes the network dependency.
+    - family: Inter
+      fonts:
+        - asset: assets/fonts/Inter-Regular.ttf
+          weight: 400
+        - asset: assets/fonts/Inter-Medium.ttf
+          weight: 500
+        - asset: assets/fonts/Inter-SemiBold.ttf
+          weight: 600
+        - asset: assets/fonts/Inter-Bold.ttf
+          weight: 700
+    # Color-emoji fallback (Noto COLRv1) so emoji render identically on every
+    # device. Older Androids ship an emoji font that lacks newer glyphs, which
+    # showed received emoji as empty boxes. Only consulted for glyphs Inter
+    # lacks (i.e. emoji), so it no longer affects digits/letters.
     - family: NotoColorEmoji
       fonts:
         - asset: assets/fonts/NotoColorEmoji.ttf

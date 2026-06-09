@@ -207,15 +207,28 @@ class LocalReconnectService {
 
   // ── Mutual authentication ──────────────────────────────────────────────────
 
-  /// Proves both peers hold the private key matching their stored public key
-  /// before a reconnected channel is trusted as "online".
+  /// Wire/protocol version of the reconnect auth handshake. v2 adds DTLS
+  /// channel binding (see [_authenticateChannel]); it is incompatible with v1
+  /// peers, which forces a re-pair when only one side has upgraded.
+  static const int _authProtocolVersion = 2;
+
+  /// Proves both peers hold the private key matching their stored public key,
+  /// *and* that the authenticated peer is the one on the other end of this
+  /// exact DTLS connection — not a relay — before the channel is trusted.
   ///
   /// Reconnect offers/answers travel unauthenticated over LAN UDP broadcast, so
-  /// without this an attacker could spoof a known peer's presence. Each side
-  /// sends a fresh random nonce; the partner signs it (RSASSA/SHA-256) and we
-  /// verify the signature against the peer's stored public key. Only on success
-  /// do we call [onSuccess] (which registers the channel). Confidentiality is
-  /// already guaranteed by end-to-end encryption; this adds authenticity.
+  /// without this an attacker could spoof a known peer's presence or relay the
+  /// handshake between two victims. Each side sends a fresh random nonce; the
+  /// partner signs `nonce || channelBinding` (RSASSA/SHA-256) and we verify it
+  /// against the peer's stored public key.
+  ///
+  /// The channel binding is a SHA-256 over the two DTLS certificate
+  /// fingerprints (ours + the peer's, in canonical order). A direct connection
+  /// yields the same binding on both ends; a relay must terminate DTLS with its
+  /// own certificate on each leg, so the fingerprints — and the binding — no
+  /// longer match, and the signature fails to verify. Confidentiality is
+  /// already guaranteed by end-to-end encryption; this adds authenticity and
+  /// relay resistance.
   ///
   /// The whole exchange must finish within [_authTimeout]; otherwise the
   /// channel and connection are closed so a silent partner cannot leave a
@@ -233,6 +246,11 @@ class LocalReconnectService {
       return;
     }
 
+    // Our view of the DTLS channel binding. Both ends must agree on this for a
+    // direct (non-relayed) connection.
+    final cb = await _channelBinding(pc);
+    final cbBytes = utf8.encode(cb);
+
     final rnd = Random.secure();
     final myNonce =
         Uint8List.fromList(List.generate(32, (_) => rnd.nextInt(256)));
@@ -247,6 +265,16 @@ class LocalReconnectService {
       unawaited(_closeQuietly(dc, pc));
     });
 
+    void fail(String why) {
+      if (done) return;
+      done = true;
+      timeout.cancel();
+      _log('[Reconnect] ❌ Auth failed for ${peer.displayName} ($why) '
+          '— refusing to register');
+      dc.onMessage = null;
+      unawaited(_closeQuietly(dc, pc));
+    }
+
     dc.onMessage = (msg) {
       if (msg.isBinary) return;
       try {
@@ -254,27 +282,39 @@ class LocalReconnectService {
         switch (m['type']) {
           case 'auth_challenge':
             final theirNonce = base64Decode(m['nonce'] as String);
-            final sig = RsaCipher.signWithPrivateKey(ownPriv, theirNonce);
+            // Sign their nonce bound to our view of the channel.
+            final toSign = Uint8List.fromList([...theirNonce, ...cbBytes]);
+            final sig = RsaCipher.signWithPrivateKey(ownPriv, toSign);
             dc.send(RTCDataChannelMessage(jsonEncode({
               'type': 'auth_response',
               'sig': base64Encode(sig),
+              'cb': cb,
+              'v': _authProtocolVersion,
             })));
             break;
           case 'auth_response':
             if (done) return;
+            // Reject anything that isn't the channel-bound v2 handshake (e.g.
+            // an unupgraded v1 peer, or a relay that stripped the binding).
+            if ((m['v'] as int?) != _authProtocolVersion) {
+              fail('unsupported handshake version');
+              return;
+            }
+            // Relay check: both ends must observe the same DTLS fingerprints.
+            if ((m['cb'] as String?) != cb) {
+              fail('channel binding mismatch');
+              return;
+            }
             final sig = base64Decode(m['sig'] as String);
-            if (RsaCipher.verifyWithPublicKey(peerPub, myNonce, sig)) {
+            final signed = Uint8List.fromList([...myNonce, ...cbBytes]);
+            if (RsaCipher.verifyWithPublicKey(peerPub, signed, sig)) {
               done = true;
               timeout.cancel();
               _log('[Reconnect] ✅ Authenticated ${peer.displayName}');
               dc.onMessage = null; // hand the channel back to the app layer
               onSuccess();
             } else {
-              done = true;
-              timeout.cancel();
-              _log('[Reconnect] ❌ Auth failed for ${peer.displayName} '
-                  '— refusing to register');
-              unawaited(_closeQuietly(dc, pc));
+              fail('signature mismatch');
             }
             break;
         }
@@ -286,7 +326,42 @@ class LocalReconnectService {
     dc.send(RTCDataChannelMessage(jsonEncode({
       'type': 'auth_challenge',
       'nonce': base64Encode(myNonce),
+      'v': _authProtocolVersion,
     })));
+  }
+
+  /// Extracts the DTLS fingerprint from an SDP's `a=fingerprint` line.
+  static String? _fingerprintFromSdp(String? sdp) {
+    if (sdp == null) return null;
+    final m =
+        RegExp(r'a=fingerprint:\S+\s+([0-9A-Fa-f:]+)').firstMatch(sdp);
+    return m?.group(1)?.toUpperCase();
+  }
+
+  /// Channel-binding tag for [pc]: SHA-256 over the local and remote DTLS
+  /// fingerprints in canonical (sorted) order, so both ends derive the same
+  /// value for a direct connection. Returns an empty string if the fingerprints
+  /// can't be read, degrading to no binding rather than breaking reconnect
+  /// (a relay can't force this path: a working DTLS connection always carries
+  /// fingerprints).
+  static Future<String> _channelBinding(RTCPeerConnection pc) async {
+    try {
+      final local = await pc.getLocalDescription();
+      final remote = await pc.getRemoteDescription();
+      final lf = _fingerprintFromSdp(local?.sdp);
+      final rf = _fingerprintFromSdp(remote?.sdp);
+      if (lf == null || rf == null) return '';
+      final ordered = [lf, rf]..sort();
+      final digest = SHA256Digest();
+      final bytes = Uint8List.fromList(utf8.encode(ordered.join('|')));
+      digest.update(bytes, 0, bytes.length);
+      final out = Uint8List(digest.digestSize);
+      digest.doFinal(out, 0);
+      return base64Encode(out);
+    } catch (e) {
+      _log('[Reconnect] channel-binding computation failed: $e');
+      return '';
+    }
   }
 
   Future<void> _closeQuietly(RTCDataChannel? dc, RTCPeerConnection? pc) async {

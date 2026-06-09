@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import '../../../core/theme.dart';
 import '../providers/pairing_provider.dart';
 
 class PairingScreen extends ConsumerWidget {
@@ -19,7 +20,7 @@ class PairingScreen extends ConsumerWidget {
             mainAxisAlignment: MainAxisAlignment.center,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              const Icon(Icons.devices, size: 72, color: Color(0xFF7B61FF)),
+              const Icon(Icons.devices, size: 72, color: AppColors.primary),
               const SizedBox(height: 8),
               const Text(
                 'Connect with a contact',
@@ -30,7 +31,7 @@ class PairingScreen extends ConsumerWidget {
               const Text(
                 'You\'ll exchange short codes to securely pair devices.',
                 textAlign: TextAlign.center,
-                style: TextStyle(color: Colors.grey, fontSize: 14),
+                style: TextStyle(color: AppColors.textMuted, fontSize: 14),
               ),
               const SizedBox(height: 40),
 
