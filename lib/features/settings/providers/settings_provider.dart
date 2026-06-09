@@ -23,12 +23,11 @@ class SettingsNotifier extends StateNotifier<AsyncValue<AppSettings>> {
   }) async {
     final current = state.valueOrNull;
     if (current == null) return;
-    final updated = AppSettings(
+    final updated = current.copyWith(
       compression: CompressionSettings(
         maxDimension: maxDimension,
         jpegQuality: jpegQuality,
       ),
-      notificationsEnabled: current.notificationsEnabled,
     );
     await _repo.saveSettings(updated);
     state = AsyncValue.data(updated);
@@ -37,10 +36,15 @@ class SettingsNotifier extends StateNotifier<AsyncValue<AppSettings>> {
   Future<void> setNotificationsEnabled(bool enabled) async {
     final current = state.valueOrNull;
     if (current == null) return;
-    final updated = AppSettings(
-      compression: current.compression,
-      notificationsEnabled: enabled,
-    );
+    final updated = current.copyWith(notificationsEnabled: enabled);
+    await _repo.saveSettings(updated);
+    state = AsyncValue.data(updated);
+  }
+
+  Future<void> setDisplayName(String name) async {
+    final current = state.valueOrNull;
+    if (current == null) return;
+    final updated = current.copyWith(displayName: name.trim());
     await _repo.saveSettings(updated);
     state = AsyncValue.data(updated);
   }

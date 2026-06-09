@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import '../../../core/errors.dart';
+import '../../../data/repositories/settings_repository.dart';
 import '../../../services/background_service.dart';
 import '../../../rtc/key_exchange_handler.dart';
 import '../../../rtc/peer_connection_pool.dart';
@@ -81,6 +82,16 @@ class PairingNotifier extends StateNotifier<PairingState> {
 
   PairingNotifier(this.ref) : super(const PairingState());
 
+  /// The name this device announces during key exchange: the user's configured
+  /// device name, or a short random fallback when none is set.
+  Future<String> _ownDisplayName() async {
+    try {
+      final settings = await SettingsRepository().getSettings();
+      if (settings.displayName.isNotEmpty) return settings.displayName;
+    } catch (_) {}
+    return 'Me_${const Uuid().v4().substring(0, 4)}';
+  }
+
   /// Turns an exception into a short, user-presentable message without leaking
   /// internal/platform details or stack traces.
   String _friendly(Object e) {
@@ -105,7 +116,7 @@ class PairingNotifier extends StateNotifier<PairingState> {
     );
     try {
       final ownPeerId = const Uuid().v4();
-      final displayName = 'Me_${const Uuid().v4().substring(0, 4)}';
+      final displayName = await _ownDisplayName();
 
       _kex = KeyExchangeHandler(
           ownPeerId: ownPeerId, ownDisplayName: displayName);
@@ -175,7 +186,7 @@ class PairingNotifier extends StateNotifier<PairingState> {
     );
     try {
       final ownPeerId = const Uuid().v4();
-      final displayName = 'Me_${const Uuid().v4().substring(0, 4)}';
+      final displayName = await _ownDisplayName();
 
       _kex = KeyExchangeHandler(
           ownPeerId: ownPeerId, ownDisplayName: displayName);

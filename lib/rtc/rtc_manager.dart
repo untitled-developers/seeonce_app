@@ -7,13 +7,24 @@ class RtcManager {
 
   final Map<String, dynamic> _config = {
     'iceServers': [
-      {'urls': AppConstants.stunServer}
+      {'urls': AppConstants.stunServers}
     ],
     'sdpSemantics': 'unified-plan',
   };
 
-  Future<webrtc.RTCPeerConnection> createPeerConnection() async {
-    return await webrtc.createPeerConnection(_config, {});
+  /// No STUN: gathering emits host candidates only and completes almost
+  /// immediately instead of waiting out a STUN round-trip. Used for LAN
+  /// reconnects, where the UDP-broadcast signalling already guarantees both
+  /// peers share a network and srflx candidates add nothing but latency.
+  final Map<String, dynamic> _lanOnlyConfig = {
+    'iceServers': [],
+    'sdpSemantics': 'unified-plan',
+  };
+
+  Future<webrtc.RTCPeerConnection> createPeerConnection(
+      {bool lanOnly = false}) async {
+    return await webrtc.createPeerConnection(
+        lanOnly ? _lanOnlyConfig : _config, {});
   }
 
   Future<webrtc.RTCDataChannel> createDataChannel(webrtc.RTCPeerConnection pc) async {

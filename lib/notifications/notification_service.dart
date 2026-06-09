@@ -15,6 +15,10 @@ class NotificationService {
   static const _msgChannelId = 'seeonce_messages';
   static const _msgChannelName = 'Received Messages';
 
+  /// Invoked with the peer id when the user taps a notification. Wired by the
+  /// app shell to open that peer's conversation.
+  void Function(String peerId)? onNotificationTap;
+
   Future<void> initialize() async {
     const androidInit = AndroidInitializationSettings('@mipmap/ic_launcher');
     const iosInit = DarwinInitializationSettings(
@@ -31,11 +35,25 @@ class NotificationService {
     await _plugin.initialize(
       initSettings,
       onDidReceiveNotificationResponse: (response) {
-        // Handle notification tap
-        // response.payload contains peerId
-        // The router should be designed to handle this (e.g., via global key or provider)
+        final peerId = response.payload;
+        if (peerId != null && peerId.isNotEmpty) {
+          onNotificationTap?.call(peerId);
+        }
       },
     );
+  }
+
+  /// If the app was cold-launched by tapping a notification, returns that
+  /// notification's peer id so the app can open the conversation directly.
+  Future<String?> getLaunchPeerId() async {
+    try {
+      final details = await _plugin.getNotificationAppLaunchDetails();
+      if (details?.didNotificationLaunchApp ?? false) {
+        final peerId = details!.notificationResponse?.payload;
+        if (peerId != null && peerId.isNotEmpty) return peerId;
+      }
+    } catch (_) {}
+    return null;
   }
 
   Future<bool> requestPermission() async {

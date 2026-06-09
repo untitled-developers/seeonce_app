@@ -1,4 +1,6 @@
+import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
@@ -24,6 +26,12 @@ class _SecureVideoWidgetState extends State<SecureVideoWidget> {
   VideoPlayerController? _controller;
   String? _error;
 
+  /// Unguessable per-view URL path. Loopback is reachable by every app on the
+  /// device, so without this any local process could port-scan 127.0.0.1 and
+  /// download the decrypted video while the viewer is open.
+  late final String _token = base64UrlEncode(
+      List<int>.generate(16, (_) => Random.secure().nextInt(256)));
+
   @override
   void initState() {
     super.initState();
@@ -33,12 +41,11 @@ class _SecureVideoWidgetState extends State<SecureVideoWidget> {
   Future<void> _setup() async {
     try {
       // Bind to loopback on a random free port; only this device can reach it.
-      final server =
-          await HttpServer.bind(InternetAddress.loopbackIPv4, 0, shared: true);
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
       _server = server;
       server.listen(_handleRequest);
 
-      final url = 'http://${server.address.address}:${server.port}/v.mp4';
+      final url = 'http://${server.address.address}:${server.port}/$_token.mp4';
       final controller = VideoPlayerController.networkUrl(Uri.parse(url));
       _controller = controller;
       await controller.initialize();
@@ -58,6 +65,11 @@ class _SecureVideoWidgetState extends State<SecureVideoWidget> {
     final bytes = widget.videoBytes;
     final total = bytes.length;
     final res = request.response;
+    if (request.uri.path != '/$_token.mp4') {
+      res.statusCode = HttpStatus.notFound;
+      await res.close();
+      return;
+    }
     try {
       res.headers.set(HttpHeaders.acceptRangesHeader, 'bytes');
       res.headers.contentType = ContentType('video', 'mp4');

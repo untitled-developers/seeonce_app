@@ -9,6 +9,7 @@ import 'package:no_screenshot/no_screenshot.dart';
 import 'crypto/key_store.dart';
 import 'data/repositories/peer_repository.dart';
 import 'messaging/incoming_message_router.dart';
+import 'notifications/notification_service.dart';
 import 'rtc/connection_supervisor.dart';
 import 'rtc/local_reconnect_service.dart';
 import 'services/background_service.dart';
@@ -137,6 +138,15 @@ class _SeeOnceAppState extends ConsumerState<SeeOnceApp>
     if (peers.isNotEmpty) {
       await BackgroundService.instance.requestPermissions();
       await BackgroundService.instance.start();
+    }
+
+    // Tapping a message notification opens that peer's conversation — both
+    // while running and when the tap cold-launched the app.
+    NotificationService.instance.onNotificationTap =
+        (peerId) => _router.push('/conversation/$peerId');
+    final launchPeerId = await NotificationService.instance.getLaunchPeerId();
+    if (launchPeerId != null && peers.any((p) => p.id == launchPeerId)) {
+      _router.push('/conversation/$launchPeerId');
     }
   }
 

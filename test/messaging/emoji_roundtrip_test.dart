@@ -29,6 +29,8 @@ class _FakeDc implements RTCDataChannel {
   @override
   int? get bufferedAmount => 0;
   @override
+  RTCDataChannelState? get state => RTCDataChannelState.RTCDataChannelOpen;
+  @override
   noSuchMethod(Invocation invocation) => null;
 }
 

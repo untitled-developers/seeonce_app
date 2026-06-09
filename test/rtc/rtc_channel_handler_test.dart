@@ -4,6 +4,22 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:seeonce_app/rtc/rtc_channel_handler.dart';
 import 'package:seeonce_app/core/constants.dart';
+import 'package:seeonce_app/core/errors.dart';
+
+/// Minimal fake channel for exercising the send path without WebRTC.
+class _FakeDc implements RTCDataChannel {
+  _FakeDc({this.channelState = RTCDataChannelState.RTCDataChannelOpen});
+  final RTCDataChannelState channelState;
+  final List<RTCDataChannelMessage> sent = [];
+  @override
+  Future<void> send(RTCDataChannelMessage message) async => sent.add(message);
+  @override
+  int? get bufferedAmount => 0;
+  @override
+  RTCDataChannelState? get state => channelState;
+  @override
+  noSuchMethod(Invocation invocation) => null;
+}
 
 /// Builds the binary chunk message that [RtcChannelHandler.sendEncryptedPayload]
 /// would produce, without needing a real [RTCDataChannel].
@@ -233,6 +249,24 @@ void main() {
       await Future.delayed(Duration.zero);
       expect(emitted, isFalse);
       expect(h.pendingBufferCount, equals(0));
+      h.dispose();
+    });
+
+    test('sending on a non-open channel fails fast with ConnectionError',
+        () async {
+      final h = RtcChannelHandler();
+      final dc =
+          _FakeDc(channelState: RTCDataChannelState.RTCDataChannelClosed);
+      await expectLater(
+        h.sendEncryptedPayload(
+          dc: dc,
+          encryptedPayload: Uint8List.fromList([1, 2, 3]),
+          messageId: 'm',
+          senderId: 's',
+        ),
+        throwsA(isA<ConnectionError>()),
+      );
+      expect(dc.sent, isEmpty, reason: 'nothing should be queued on a dead dc');
       h.dispose();
     });
 

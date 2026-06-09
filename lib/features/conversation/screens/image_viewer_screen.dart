@@ -20,6 +20,8 @@ class ImageViewerScreen extends ConsumerStatefulWidget {
 }
 
 class _ImageViewerScreenState extends ConsumerState<ImageViewerScreen> with WidgetsBindingObserver {
+  bool _dismissed = false;
+
   @override
   void initState() {
     super.initState();
@@ -34,15 +36,21 @@ class _ImageViewerScreenState extends ConsumerState<ImageViewerScreen> with Widg
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.paused || state == AppLifecycleState.inactive) {
-      if (mounted) {
-        // Auto-dismiss when app is backgrounded — mark viewed so the tile is removed.
-        ref
-            .read(conversationProvider.notifier)
-            .markAsViewed(widget.peerId, widget.message.messageId);
-        context.pop();
-      }
+    // Only a genuine background (`paused`) consumes the view. `inactive` fires
+    // transiently during route transitions / control-centre peeks, which was
+    // consuming the image the instant it opened (same fix as the video viewer).
+    if (state == AppLifecycleState.paused) {
+      _markViewedAndPop();
     }
+  }
+
+  void _markViewedAndPop() {
+    if (_dismissed || !mounted) return;
+    _dismissed = true;
+    ref
+        .read(conversationProvider.notifier)
+        .markAsViewed(widget.peerId, widget.message.messageId);
+    context.pop();
   }
 
   Future<bool> _onWillPop() async {
@@ -67,15 +75,9 @@ class _ImageViewerScreenState extends ConsumerState<ImageViewerScreen> with Widg
 
   Future<void> _dismissImage() async {
     final shouldClose = await _onWillPop();
-    if (shouldClose && mounted) {
-      // Mark viewed (removes message from state) before popping so the
-      // conversation screen rebuilds without the tile immediately.
-      ref
-          .read(conversationProvider.notifier)
-          .markAsViewed(widget.peerId, widget.message.messageId);
-      // ignore: use_build_context_synchronously
-      context.pop();
-    }
+    // Mark viewed (removes message from state) before popping so the
+    // conversation screen rebuilds without the tile immediately.
+    if (shouldClose) _markViewedAndPop();
   }
 
   @override
