@@ -1,0 +1,93 @@
+name: seeonce_app
+description: "An image sharing app with webrtc support, two way encrypted see once features"
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.11.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  cupertino_icons: ^1.0.8
+
+  # WebRTC (must be in main deps, not dev)
+  flutter_webrtc: ^1.4.1
+
+  # Crypto — pure Dart RSA + AES
+  pointycastle: ^3.9.1
+  cryptography: ^2.7.0
+
+  # Local storage
+  hive: ^2.2.3
+  hive_flutter: ^1.1.0
+  flutter_secure_storage: ^9.2.2
+
+  # Notifications
+  flutter_local_notifications: ^17.2.4
+
+  # Background / foreground service (Android keep-alive)
+  flutter_foreground_task: ^8.0.0
+
+  # Image processing
+  flutter_image_compress: ^2.3.0
+  image_picker: ^1.1.2
+
+  # Video: compression/trim + playback
+  video_compress: ^3.1.2
+  video_player: ^2.9.1
+
+  # State management & navigation
+  flutter_riverpod: ^2.6.1
+  hooks_riverpod: ^2.6.1
+  flutter_hooks: ^0.20.5
+  go_router: ^14.6.3
+
+  # QR code
+  qr_flutter: ^4.1.0
+  mobile_scanner: ^5.2.3
+
+  # Utilities
+  uuid: ^4.5.1
+  intl: ^0.20.2
+  json_annotation: ^4.9.0
+  settings_ui: ^2.0.2
+  no_screenshot: ^1.1.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+
+  flutter_lints: ^6.0.0
+  build_runner: any
+  json_serializable: any
+  hive_generator: any
+
+flutter:
+  uses-material-design: true
+
+  fonts:
+    # Inter, bundled locally. Previously the app pulled Inter at runtime via
+    # google_fonts; when the device was offline (or before the download
+    # finished on first launch) the primary font was missing and ALL text fell
+    # through to NotoColorEmoji — rendering digits as gradient emoji glyphs and
+    # letters with broken spacing. Bundling removes the network dependency.
+    - family: Inter
+      fonts:
+        - asset: assets/fonts/Inter-Regular.ttf
+          weight: 400
+        - asset: assets/fonts/Inter-Medium.ttf
+          weight: 500
+        - asset: assets/fonts/Inter-SemiBold.ttf
+          weight: 600
+        - asset: assets/fonts/Inter-Bold.ttf
+          weight: 700
+    # Color-emoji fallback (Noto COLRv1) so emoji render identically on every
+    # device. Older Androids ship an emoji font that lacks newer glyphs, which
+    # showed received emoji as empty boxes. Only consulted for glyphs Inter
+    # lacks (i.e. emoji), so it no longer affects digits/letters.
+    - family: NotoColorEmoji
+      fonts:
+        - asset: assets/fonts/NotoColorEmoji.ttf
